@@ -12,15 +12,26 @@ import freechips.rocketchip.amba.apb._
 import freechips.rocketchip.system.SimAXIMem
 
 object AXI4SlaveNodeGenerator {
-  def apply(params: Option[MasterPortParams], address: Seq[AddressSet])(implicit valName: ValName) =
-    AXI4SlaveNode(params.map(p => AXI4SlavePortParameters(
-        slaves = Seq(AXI4SlaveParameters(
-          address       = address,
-          executable    = p.executable,
-          supportsWrite = TransferSizes(1, p.maxXferBytes),
-          supportsRead  = TransferSizes(1, p.maxXferBytes))),
-        beatBytes = p.beatBytes
-      )).toSeq)
+  def apply(params: Option[MasterPortParams], address: Seq[AddressSet])(implicit
+      valName: ValName
+  ) =
+    AXI4SlaveNode(
+      params
+        .map(p =>
+          AXI4SlavePortParameters(
+            slaves = Seq(
+              AXI4SlaveParameters(
+                address = address,
+                executable = p.executable,
+                supportsWrite = TransferSizes(1, p.maxXferBytes),
+                supportsRead = TransferSizes(1, p.maxXferBytes)
+              )
+            ),
+            beatBytes = p.beatBytes
+          )
+        )
+        .toSeq
+    )
 }
 
 class ysyxSoCASIC(implicit p: Parameters) extends LazyModule {
@@ -28,30 +39,64 @@ class ysyxSoCASIC(implicit p: Parameters) extends LazyModule {
   val xbar2 = AXI4Xbar()
   val apbxbar = LazyModule(new APBFanout).node
   val cpu = LazyModule(new CPU(idBits = ChipLinkParam.idBits))
-  val chipMaster = if (Config.hasChipLink) Some(LazyModule(new ChipLinkMaster)) else None
-  val chiplinkNode = if (Config.hasChipLink) Some(AXI4SlaveNodeGenerator(p(ExtBus), ChipLinkParam.allSpace)) else None
+  val chipMaster =
+    if (Config.hasChipLink) Some(LazyModule(new ChipLinkMaster)) else None
+  val chiplinkNode =
+    if (Config.hasChipLink)
+      Some(AXI4SlaveNodeGenerator(p(ExtBus), ChipLinkParam.allSpace))
+    else None
 
-  val luart = LazyModule(new APBUart16550(AddressSet.misaligned(0x10000000, 0x1000)))
+  val luart = LazyModule(
+    new APBUart16550(AddressSet.misaligned(0x10000000, 0x1000))
+  )
   val lgpio = LazyModule(new APBGPIO(AddressSet.misaligned(0x10002000, 0x10)))
-  val lkeyboard = LazyModule(new APBKeyboard(AddressSet.misaligned(0x10011000, 0x8)))
+  val lkeyboard = LazyModule(
+    new APBKeyboard(AddressSet.misaligned(0x10011000, 0x8))
+  )
   val lvga = LazyModule(new APBVGA(AddressSet.misaligned(0x21000000, 0x200000)))
-  val lspi  = LazyModule(new APBSPI(
-    AddressSet.misaligned(0x10001000, 0x1000) ++    // SPI controller
-    AddressSet.misaligned(0x30000000, 0x10000000)   // XIP flash
-  ))
-  val lpsram = LazyModule(new APBPSRAM(AddressSet.misaligned(0x80000000L, 0x400000)))
-  val lmrom = LazyModule(new AXI4MROM(AddressSet.misaligned(0x20000000, 0x1000)))
-  val sramNode = AXI4RAM(AddressSet.misaligned(0x0f000000, 0x2000).head, false, true, 8, None, Nil, false)
+  val lspi = LazyModule(
+    new APBSPI(
+      AddressSet.misaligned(0x10001000, 0x1000) ++ // SPI controller
+        AddressSet.misaligned(0x30000000, 0x10000000) // XIP flash
+    )
+  )
+  val lpsram = LazyModule(
+    new APBPSRAM(AddressSet.misaligned(0x80000000L, 0x400000))
+  )
+  val lmrom = LazyModule(
+    new AXI4MROM(AddressSet.misaligned(0x20000000, 0x1000))
+  )
+  val sramNode = AXI4RAM(
+    AddressSet.misaligned(0x0f000000, 0x2000).head,
+    false,
+    true,
+    8,
+    None,
+    Nil,
+    false
+  )
 
   val sdramAddressSet = AddressSet.misaligned(0xa0000000L, 0x2000000)
-  val lsdram_apb = if (!Config.sdramUseAXI) Some(LazyModule(new APBSDRAM (sdramAddressSet))) else None
-  val lsdram_axi = if ( Config.sdramUseAXI) Some(LazyModule(new AXI4SDRAM(sdramAddressSet))) else None
+  val lsdram_apb =
+    if (!Config.sdramUseAXI) Some(LazyModule(new APBSDRAM(sdramAddressSet)))
+    else None
+  val lsdram_axi =
+    if (Config.sdramUseAXI) Some(LazyModule(new AXI4SDRAM(sdramAddressSet)))
+    else None
 
-  List(lspi.node, luart.node, lpsram.node, lgpio.node, lkeyboard.node, lvga.node).map(_ := apbxbar)
-  List(apbxbar := APBDelayer() := AXI4ToAPB(), lmrom.node, sramNode).map(_ := xbar2)
+  List(
+    lspi.node,
+    luart.node,
+    lpsram.node,
+    lgpio.node,
+    lkeyboard.node,
+    lvga.node
+  ).map(_ := apbxbar)
+  List(apbxbar := APBDelayer() := AXI4ToAPB(), lmrom.node, sramNode)
+    .map(_ := xbar2)
   xbar2 := AXI4UserYanker(Some(1)) := AXI4Fragmenter() := xbar
   if (Config.sdramUseAXI) lsdram_axi.get.node := ysyx.AXI4Delayer() := xbar
-  else                    lsdram_apb.get.node := apbxbar
+  else lsdram_apb.get.node := apbxbar
   if (Config.hasChipLink) chiplinkNode.get := xbar
   xbar := cpu.masterNode
 
@@ -61,10 +106,15 @@ class ysyxSoCASIC(implicit p: Parameters) extends LazyModule {
     // to initialize some async modules before accept any requests from cpu
     cpu.module.reset := SynchronizerShiftReg(reset.asBool, 10) || reset.asBool
 
-    val fpga_io = if (Config.hasChipLink) Some(IO(chiselTypeOf(chipMaster.get.module.fpga_io))) else None
+    val fpga_io =
+      if (Config.hasChipLink)
+        Some(IO(chiselTypeOf(chipMaster.get.module.fpga_io)))
+      else None
     if (Config.hasChipLink) {
       // connect chiplink slave interface to crossbar
-      (chipMaster.get.slave zip chiplinkNode.get.in) foreach { case (io, (bundle, _)) => io <> bundle }
+      (chipMaster.get.slave zip chiplinkNode.get.in) foreach {
+        case (io, (bundle, _)) => io <> bundle
+      }
 
       // connect chiplink dma interface to cpu
       cpu.module.slave <> chipMaster.get.master_mem(0)
@@ -79,8 +129,9 @@ class ysyxSoCASIC(implicit p: Parameters) extends LazyModule {
     val intr_from_chipSlave = IO(Input(Bool()))
     cpu.module.interrupt := intr_from_chipSlave
 
-    val sdramBundle = if (Config.sdramUseAXI) lsdram_axi.get.module.sdram_bundle
-                      else                    lsdram_apb.get.module.sdram_bundle
+    val sdramBundle =
+      if (Config.sdramUseAXI) lsdram_axi.get.module.sdram_bundle
+      else lsdram_apb.get.module.sdram_bundle
 
     // expose slave I/O interface as ports
     val spi = IO(chiselTypeOf(lspi.module.spi_bundle))
@@ -102,7 +153,6 @@ class ysyxSoCASIC(implicit p: Parameters) extends LazyModule {
 
 class ysyxSoCFPGA(implicit p: Parameters) extends ChipLinkSlave
 
-
 class ysyxSoCFull(implicit p: Parameters) extends LazyModule {
   val asic = LazyModule(new ysyxSoCASIC)
   ElaborationArtefacts.add("graphml", graphML)
@@ -119,11 +169,17 @@ class ysyxSoCFull(implicit p: Parameters) extends LazyModule {
       masic.fpga_io.get.b2c <> mfpga.fpga_io.c2b
       mfpga.fpga_io.b2c <> masic.fpga_io.get.c2b
 
-      (fpga.master_mem zip fpga.axi4MasterMemNode.in).map { case (io, (_, edge)) =>
-        val mem = LazyModule(new SimAXIMem(edge,
-          base = ChipLinkParam.mem.base, size = ChipLinkParam.mem.mask + 1))
-        Module(mem.module)
-        mem.io_axi4.head <> io
+      (fpga.master_mem zip fpga.axi4MasterMemNode.in).map {
+        case (io, (_, edge)) =>
+          val mem = LazyModule(
+            new SimAXIMem(
+              edge,
+              base = ChipLinkParam.mem.base,
+              size = ChipLinkParam.mem.mask + 1
+            )
+          )
+          Module(mem.module)
+          mem.io_axi4.head <> io
       }
 
       fpga.master_mmio.map(_ := DontCare)
@@ -135,17 +191,17 @@ class ysyxSoCFull(implicit p: Parameters) extends LazyModule {
     val flash = Module(new flash)
     flash.io <> masic.spi
     flash.io.ss := masic.spi.ss(0)
-    val bitrev = Module(new bitrev)
+    val bitrev = Module(new bitrevChisel)
     bitrev.io <> masic.spi
     bitrev.io.ss := masic.spi.ss(7)
-    masic.spi.miso := List(bitrev.io, flash.io).map(_.miso).reduce(_&&_)
+    masic.spi.miso := List(bitrev.io, flash.io).map(_.miso).reduce(_ && _)
 
     val psram = Module(new psram)
     psram.io <> masic.psram
     val sdram = Module(new sdram)
     sdram.io <> masic.sdram
 
-    val externalPins = IO(new Bundle{
+    val externalPins = IO(new Bundle {
       val gpio = chiselTypeOf(masic.gpio)
       val ps2 = chiselTypeOf(masic.ps2)
       val vga = chiselTypeOf(masic.vga)
