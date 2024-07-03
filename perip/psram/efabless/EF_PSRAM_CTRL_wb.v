@@ -14,81 +14,88 @@
 	limitations under the License.
 */
 
-`timescale              1ns/1ps
-`default_nettype        none
+`timescale 1ns / 1ps 
+`default_nettype none
 
 // Using EBH Command
 module EF_PSRAM_CTRL_wb (
     // WB bus Interface
-    input   wire        clk_i,
-    input   wire        rst_i,
-    input   wire [31:0] adr_i,
-    input   wire [31:0] dat_i,
-    output  wire [31:0] dat_o,
-    input   wire [3:0]  sel_i,
-    input   wire        cyc_i,
-    input   wire        stb_i,
-    output  wire        ack_o,
-    input   wire        we_i,
+    input  wire        clk_i,
+    input  wire        rst_i,
+    input  wire [31:0] adr_i,
+    input  wire [31:0] dat_i,
+    output wire [31:0] dat_o,
+    input  wire [ 3:0] sel_i,
+    input  wire        cyc_i,
+    input  wire        stb_i,
+    output wire        ack_o,
+    input  wire        we_i,
 
     // External Interface to Quad I/O
-    output  wire            sck,
-    output  wire            ce_n,
-    input   wire [3:0]      din,
-    output  wire [3:0]      dout,
-    output  wire [3:0]      douten
+    output wire       sck,
+    output wire       ce_n,
+    input  wire [3:0] din,
+    output wire [3:0] dout,
+    output wire [3:0] douten
 );
 
-    localparam  ST_IDLE = 1'b0,
-                ST_WAIT = 1'b1;
+    localparam ST_IDLE = 2'b00, ST_WAIT = 2'b01, ST_ENTER_QPI = 2'b10;
 
-    wire        mr_sck;
-    wire        mr_ce_n;
-    wire [3:0]  mr_din;
-    wire [3:0]  mr_dout;
-    wire        mr_doe;
+    wire       mr_sck;
+    wire       mr_ce_n;
+    wire [3:0] mr_din;
+    wire [3:0] mr_dout;
+    wire       mr_doe;
 
-    wire        mw_sck;
-    wire        mw_ce_n;
-    wire [3:0]  mw_din;
-    wire [3:0]  mw_dout;
-    wire        mw_doe;
+    wire       mw_sck;
+    wire       mw_ce_n;
+    wire [3:0] mw_din;
+    wire [3:0] mw_dout;
+    wire       mw_doe;
+
+    wire       mqpi_en;
+    wire       mqpi_sck;
+    wire       mqpi_ce_n;
+    wire [3:0] mqpi_din;
+    wire [3:0] mqpi_dout;
+    wire       mqpi_doe;
 
     // PSRAM Reader and Writer wires
-    wire        mr_rd;
-    wire        mr_done;
-    wire        mw_wr;
-    wire        mw_done;
+    wire       mr_rd;
+    wire       mr_done;
+    wire       mw_wr;
+    wire       mw_done;
+    wire       mqpi_done;
 
     //wire        doe;
 
     // WB Control Signals
-    wire        wb_valid        =   cyc_i & stb_i;
-    wire        wb_we           =   we_i & wb_valid;
-    wire        wb_re           =   ~we_i & wb_valid;
+    wire       wb_valid = cyc_i & stb_i;
+    wire       wb_we = we_i & wb_valid;
+    wire       wb_re = ~we_i & wb_valid;
     //wire[3:0]   wb_byte_sel     =   sel_i & {4{wb_we}};
 
     // The FSM
-    reg         state, nstate;
-    always @ (posedge clk_i or posedge rst_i)
-        if(rst_i)
-            state <= ST_IDLE;
-        else
-            state <= nstate;
+    reg [1:0] state, nstate;
+    always @(posedge clk_i or posedge rst_i)
+        if (rst_i) state <= ST_ENTER_QPI;
+        else state <= nstate;
 
     always @* begin
-        case(state)
-            ST_IDLE :
-                if(wb_valid)
-                    nstate = ST_WAIT;
-                else
-                    nstate = ST_IDLE;
+        case (state)
+            ST_IDLE:
+            if (wb_valid) nstate = ST_WAIT;
+            else nstate = ST_IDLE;
 
-            ST_WAIT :
-                if((mw_done & wb_we) | (mr_done & wb_re))
-                    nstate = ST_IDLE;
-                else
-                    nstate = ST_WAIT;
+            ST_WAIT:
+            if ((mw_done & wb_we) | (mr_done & wb_re)) nstate = ST_IDLE;
+            else nstate = ST_WAIT;
+
+            ST_ENTER_QPI:
+            if (mqpi_done) nstate = ST_IDLE;
+            else nstate = ST_ENTER_QPI;
+
+            default: nstate = ST_ENTER_QPI;
         endcase
     end
 
@@ -109,12 +116,11 @@ module EF_PSRAM_CTRL_wb (
                         (sel_i[2] & size==2)? dat_i[23:16] :
                         dat_i[7:0];
 
-    wire [7:0]  byte1 = (sel_i[1])          ? dat_i[15:8]  :
-                        dat_i[31:24];
+    wire [7:0] byte1 = (sel_i[1]) ? dat_i[15:8] : dat_i[31:24];
 
-    wire [7:0]  byte2 = dat_i[23:16];
+    wire [7:0] byte2 = dat_i[23:16];
 
-    wire [7:0]  byte3 = dat_i[31:24];
+    wire [7:0] byte3 = dat_i[31:24];
 
     wire [31:0] wdata = {byte3, byte2, byte1, byte0};
 
@@ -127,46 +133,58 @@ module EF_PSRAM_CTRL_wb (
                         2'b00;
                       */
 
-    assign mr_rd    = ( (state==ST_IDLE ) & wb_re );
-    assign mw_wr    = ( (state==ST_IDLE ) & wb_we );
+    assign mr_rd   = ((state == ST_IDLE) & wb_re);
+    assign mw_wr   = ((state == ST_IDLE) & wb_we);
+    assign mqpi_en = (state == ST_ENTER_QPI);
 
     PSRAM_READER MR (
-        .clk(clk_i),
-        .rst_n(~rst_i),
-        .addr({adr_i[23:2],2'b0}),
-        .rd(mr_rd),
+        .clk   (clk_i),
+        .rst_n (~rst_i),
+        .addr  ({adr_i[23:2], 2'b0}),
+        .rd    (mr_rd),
         //.size(size), Always read a word
-        .size(3'd4),
-        .done(mr_done),
-        .line(dat_o),
-        .sck(mr_sck),
-        .ce_n(mr_ce_n),
-        .din(mr_din),
-        .dout(mr_dout),
+        .size  (3'd4),
+        .done  (mr_done),
+        .line  (dat_o),
+        .sck   (mr_sck),
+        .ce_n  (mr_ce_n),
+        .din   (mr_din),
+        .dout  (mr_dout),
         .douten(mr_doe)
     );
 
     PSRAM_WRITER MW (
-        .clk(clk_i),
-        .rst_n(~rst_i),
-        .addr({adr_i[23:0]}),
-        .wr(mw_wr),
-        .size(size),
-        .done(mw_done),
-        .line(wdata),
-        .sck(mw_sck),
-        .ce_n(mw_ce_n),
-        .din(mw_din),
-        .dout(mw_dout),
+        .clk   (clk_i),
+        .rst_n (~rst_i),
+        .addr  ({adr_i[23:0]}),
+        .wr    (mw_wr),
+        .size  (size),
+        .done  (mw_done),
+        .line  (wdata),
+        .sck   (mw_sck),
+        .ce_n  (mw_ce_n),
+        .din   (mw_din),
+        .dout  (mw_dout),
         .douten(mw_doe)
     );
 
-    assign sck  = wb_we ? mw_sck  : mr_sck;
-    assign ce_n = wb_we ? mw_ce_n : mr_ce_n;
-    assign dout = wb_we ? mw_dout : mr_dout;
-    assign douten  = wb_we ? {4{mw_doe}}  : {4{mr_doe}};
+    PSRAM_ENTER_QPI MQPI (
+        .clk   (clk_i),
+        .rst_n (~rst_i),
+        .en    (mqpi_en),
+        .done  (mqpi_done),
+        .sck   (mqpi_sck),
+        .ce_n  (mqpi_ce_n),
+        .dout  (mqpi_dout),
+        .douten(mqpi_doe)
+    );
+
+    assign sck    = (state == ST_ENTER_QPI) ? mqpi_sck : (wb_we ? mw_sck : mr_sck);
+    assign ce_n   = (state == ST_ENTER_QPI) ? mqpi_ce_n : (wb_we ? mw_ce_n : mr_ce_n);
+    assign dout   = (state == ST_ENTER_QPI) ? mqpi_dout : (wb_we ? mw_dout : mr_dout);
+    assign douten = (state == ST_ENTER_QPI) ? {4{mqpi_doe}} : (wb_we ? {4{mw_doe}} : {4{mr_doe}});
 
     assign mw_din = din;
     assign mr_din = din;
-    assign ack_o = wb_we ? mw_done :mr_done ;
+    assign ack_o  = (state == ST_ENTER_QPI) ? 1'b0 : (wb_we ? mw_done : mr_done);
 endmodule

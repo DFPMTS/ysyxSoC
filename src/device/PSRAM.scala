@@ -70,6 +70,31 @@ class psramChisel_cmd extends BlackBox with HasBlackBoxInline {
   )
 }
 
+class psramChisel_mode extends BlackBox with HasBlackBoxInline {
+  val io = IO(new Bundle {
+    val sck = Input(Bool())
+    val enter_qpi = Input(Bool())
+    val is_qpi = Output(Bool())
+  })
+  setInline(
+    "psramChisel_mode.v",
+    """module psramChisel_mode(
+    |    input sck,
+    |    input enter_qpi,
+    |    output reg is_qpi
+    |  );
+    |    initial begin 
+    |      is_qpi = 0;
+    |    end
+    |
+    |    always@(posedge sck)begin
+    |      is_qpi |= enter_qpi;
+    |    end
+    |endmodule
+    """.stripMargin
+  )
+}
+
 class psramChisel extends RawModule {
   val io = IO(Flipped(new QSPIIO))
   val d_o = Wire(UInt(4.W))
@@ -81,12 +106,21 @@ class psramChisel extends RawModule {
     val cnt = RegInit(0.U(3.W))
     val data = Reg(UInt(32.W))
 
-    val s_cmd :: s_addr :: s_wait :: s_data_in :: s_data_out :: Nil = Enum(5)
+    val s_cmd :: s_addr :: s_wait :: s_data_in :: s_data_out :: Nil =
+      Enum(5)
+    val psram_mode = Module(new psramChisel_mode)
+    val enter_qpi = Wire(Bool())
+    psram_mode.io.sck := io.sck
+    psram_mode.io.enter_qpi := enter_qpi
+    val qpi_mode = psram_mode.io.is_qpi
+
     val state = RegInit(s_cmd)
 
+    val CMD_35H = "h35".U(8.W)
     val CMD_EBH = "hEB".U(8.W)
     val CMD_38H = "h38".U(8.W)
     val CMD_CYCLES = 8.U
+    val CMD_QPI_CYCLES = 2.U
     val ADDR_CYCLES = 6.U
     // add one more cycle, see Datasheet Figure 5.3
     // cycle = 0 before posedge 14
@@ -98,29 +132,39 @@ class psramChisel extends RawModule {
     // PSRAM controller WRITE size can vary, my choice is every 2 cycles, write byte, increase addr, it will stay at s_data_in until next reset
     val DATA_IN_CYCLES = 2.U
 
+    val cmd_last_cycle =
+      Mux(qpi_mode, cnt === CMD_QPI_CYCLES - 1.U, cnt === CMD_CYCLES - 1.U)
+    val addr_last_cycle = cnt === ADDR_CYCLES - 1.U
+    val wait_last_cycle = cnt === WAIT_CYCLES - 1.U
+
     state := MuxLookup(state, s_cmd)(
       Seq(
-        s_cmd -> Mux(cnt === CMD_CYCLES - 1.U, s_addr, s_cmd),
+        s_cmd -> Mux(cmd_last_cycle, s_addr, s_cmd),
         s_addr -> Mux(
-          cnt === ADDR_CYCLES - 1.U,
+          addr_last_cycle,
           Mux(cmd === CMD_38H, s_data_in, s_wait),
           s_addr
         ),
         s_data_in -> s_data_in,
-        s_wait -> Mux(cnt === WAIT_CYCLES - 1.U, s_data_out, s_wait),
+        s_wait -> Mux(wait_last_cycle, s_data_out, s_wait),
         s_data_out -> Mux(cnt === DATA_OUT_CYCLES - 1.U, s_cmd, s_data_out)
       )
     )
 
     cnt := MuxLookup(state, cnt + 1.U)(
       Seq(
-        s_cmd -> Mux(cnt === CMD_CYCLES - 1.U, 0.U, cnt + 1.U),
-        s_addr -> Mux(cnt === ADDR_CYCLES - 1.U, 0.U, cnt + 1.U),
-        s_wait -> Mux(cnt === WAIT_CYCLES - 1.U, 0.U, cnt + 1.U),
+        s_cmd -> Mux(cmd_last_cycle, 0.U, cnt + 1.U),
+        s_addr -> Mux(addr_last_cycle, 0.U, cnt + 1.U),
+        s_wait -> Mux(wait_last_cycle, 0.U, cnt + 1.U),
         s_data_in -> Mux(cnt === DATA_IN_CYCLES - 1.U, 0.U, cnt + 1.U)
       )
     )
-    cmd := Mux(state === s_cmd, Cat(cmd(6, 0), d_i(0)), cmd)
+    cmd := Mux(
+      state === s_cmd,
+      Mux(qpi_mode, Cat(cmd(3, 0), d_i), Cat(cmd(6, 0), d_i(0))),
+      cmd
+    )
+
     addr := MuxLookup(state, addr)(
       Seq(
         s_addr -> Cat(addr(19, 0), d_i),
@@ -149,6 +193,11 @@ class psramChisel extends RawModule {
 
     val valid =
       (cmd === CMD_EBH && state === s_wait && cnt === WAIT_CYCLES - 1.U) || (cmd === CMD_38H && state === s_data_in && cnt === DATA_IN_CYCLES - 1.U)
+
+    enter_qpi := Cat(
+      cmd(6, 0),
+      d_i(0)
+    ) === CMD_35H && state === s_cmd && cnt === CMD_CYCLES - 1.U
 
     psram_cmd.io.clk := io.sck
     psram_cmd.io.cmd := cmd
