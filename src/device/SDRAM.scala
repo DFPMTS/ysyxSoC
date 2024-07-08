@@ -11,8 +11,9 @@ import freechips.rocketchip.diplomacy._
 import freechips.rocketchip.util._
 import freechips.rocketchip.rocket.CSR.mode
 import freechips.rocketchip.rocket.PRV.U
+import chisel3.experimental.attach
 
-class SDRAMIO extends Bundle {
+class SDRAM_CHIP_IO extends Bundle {
   val clk = Output(Bool())
   val cke = Output(Bool())
   val cs = Output(Bool())
@@ -22,7 +23,21 @@ class SDRAMIO extends Bundle {
   val a = Output(UInt(13.W))
   val ba = Output(UInt(2.W))
   val dqm = Output(UInt(2.W))
-  val dq = Analog(16.W)
+  val d_o = Input(UInt(16.W))
+  val d_i = Output(UInt(16.W))
+  val d_en = Input(Bool())
+}
+class SDRAMIO extends Bundle {
+  val clk = Output(Bool())
+  val cke = Output(Bool())
+  val cs = Output(Bool())
+  val ras = Output(Bool())
+  val cas = Output(Bool())
+  val we = Output(Bool())
+  val a = Output(UInt(13.W))
+  val ba = Output(UInt(3.W))
+  val dqm = Output(UInt(4.W))
+  val dq = Analog(32.W)
 }
 
 class sdram_top_axi extends BlackBox {
@@ -92,17 +107,13 @@ class sdramChisel_cmd extends BlackBox with HasBlackBoxInline {
   )
 }
 
-class sdramChisel extends RawModule {
-  val io = IO(Flipped(new SDRAMIO))
-  val d_o = Wire(UInt(16.W))
-  val d_en = Wire(Bool())
-  val d_i = TriStateInBuf(io.dq, d_o, d_en)
+class sdramChip(word_ext: UInt) extends RawModule {
+  val io = IO(Flipped(new SDRAM_CHIP_IO))
 
   withClockAndReset(io.clk.asClock, ~io.cke) {
     val cmd = Cat(io.cs, io.ras, io.cas, io.we)
     val cmd_r = Reg(cmd.cloneType)
     val cnt = RegInit(0.U(4.W))
-    d_en := true.B
     // col   9-bits  {addr[9:2],1'b0}
     // row  13-bits   addr[24:12]
     // bank  2-bits   addr[11:10]
@@ -220,6 +231,7 @@ class sdramChisel extends RawModule {
     sdram_cmd.io.clk := io.clk
     sdram_cmd.io.addr := Cat(
       active_row(ba),
+      word_ext,
       ba,
       Mux(state === s_Idle && cmd === WRITE, col_w, col),
       0.U(1.W)
@@ -228,10 +240,74 @@ class sdramChisel extends RawModule {
       || cmd === WRITE || state === s_Write) && row_open(ba)
     sdram_cmd.io.cmd := Mux(state === s_Idle, cmd, cmd_r)
     sdram_cmd.io.dqm := io.dqm
-    sdram_cmd.io.wdata := d_i
+    sdram_cmd.io.wdata := io.d_i
 
-    d_en := (state === s_Read && cnt >= CL && cnt < CL + BL)
-    d_o := sdram_cmd.io.rdata
+    io.d_en := (state === s_Read && cnt >= CL && cnt < CL + BL)
+    io.d_o := sdram_cmd.io.rdata
+  }
+}
+
+class sdramChisel extends RawModule {
+  val io = IO(Flipped(new SDRAMIO))
+  val d_o = Wire(UInt(32.W))
+  val d_en = Wire(Bool())
+  val d_i = TriStateInBuf(io.dq, d_o, d_en)
+  withClock(io.clk.asClock) {
+    val NOP = "b0111".U
+    val ACTIVE = "b0011".U
+    val READ = "b0101".U
+    val WRITE = "b0100".U
+    val cmd = Cat(io.cs, io.ras, io.cas, io.we)
+    val ba_r = RegEnable(io.ba, cmd === READ || cmd === WRITE)
+    val ba = Mux(cmd === READ || cmd === WRITE, io.ba, ba_r)
+
+    val chips = Seq(
+      Module(new sdramChip(0.U(1.W))),
+      Module(new sdramChip(0.U(1.W))),
+      Module(new sdramChip(1.U(1.W))),
+      Module(new sdramChip(1.U(1.W)))
+    )
+
+    for ((chip, idx) <- chips.zipWithIndex) {
+      chip.io.clk := io.clk
+      chip.io.cke := io.cke
+      chip.io.ba := io.ba(1, 0)
+      when(
+        (cmd === ACTIVE || cmd === READ || cmd === WRITE) && io
+          .ba(2) =/= idx.asUInt(2.W)(1)
+      ) {
+        chip.io.cs := 0.U
+        chip.io.ras := 1.U
+        chip.io.cas := 1.U
+        chip.io.we := 1.U
+      }.otherwise {
+        chip.io.cs := io.cs
+        chip.io.ras := io.ras
+        chip.io.cas := io.cas
+        chip.io.we := io.we
+      }
+      val high = (idx & 1) == 1
+      val chip_d_i = if (high) d_i(31, 16) else d_i(15, 0)
+      chip.io.d_i := chip_d_i
+      val chip_a =
+        if (high) Mux(cmd === READ || cmd === WRITE, io.a + 1.U, io.a)
+        else io.a
+      chip.io.a := chip_a
+      val chip_dqm = if (high) io.dqm(3, 2) else io.dqm(1, 0)
+      chip.io.dqm := chip_dqm
+    }
+
+    d_o := Mux(
+      ba(2),
+      Cat(chips(3).io.d_o, chips(2).io.d_o),
+      Cat(chips(1).io.d_o, chips(0).io.d_o)
+    )
+
+    d_en := Mux(
+      ba(2),
+      chips(3).io.d_en & chips(2).io.d_en,
+      chips(0).io.d_en & chips(1).io.d_en
+    )
   }
 }
 
