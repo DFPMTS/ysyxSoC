@@ -250,6 +250,7 @@ class sdramChisel extends RawModule {
     val ACTIVE = "b0011".U
     val READ = "b0101".U
     val WRITE = "b0100".U
+    val PRECHARGE = "b0010".U
     val cmd = Cat(io.cs, io.ras, io.cas, io.we)
     val ba_r = RegEnable(io.ba, cmd === READ || cmd === WRITE)
     val ba = Mux(cmd === READ || cmd === WRITE, io.ba, ba_r)
@@ -266,7 +267,7 @@ class sdramChisel extends RawModule {
       chip.io.cke := io.cke
       chip.io.ba := io.ba(1, 0)
       when(
-        (cmd === ACTIVE || cmd === READ || cmd === WRITE) && io
+        (cmd === ACTIVE || cmd === READ || cmd === WRITE || cmd === PRECHARGE) && io
           .ba(2) =/= idx.asUInt(2.W)(1)
       ) {
         chip.io.cs := 0.U
