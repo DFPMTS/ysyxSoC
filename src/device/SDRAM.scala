@@ -159,7 +159,8 @@ class sdramChip(word_ext: UInt) extends RawModule {
     val row_open = RegInit(VecInit(Seq.fill(4)(false.B)))
     val active_row = Reg(Vec(4, UInt(13.W)))
 
-    val ba = Reg(UInt(2.W))
+    val ba_r = RegEnable(io.ba, cmd === READ || cmd === WRITE)
+    val ba = Mux(cmd === READ || cmd === WRITE, io.ba, ba_r)
     def next_state_by_cmd(cmd: UInt): UInt = {
       MuxLookup(cmd, s_Idle)(
         Seq(
@@ -219,14 +220,6 @@ class sdramChip(word_ext: UInt) extends RawModule {
       )
     )
 
-    when(cmd === READ) {
-      ba := io.ba
-    }
-
-    when(cmd === WRITE) {
-      ba := io.ba
-    }
-
     val sdram_cmd = Module(new sdramChisel_cmd)
     sdram_cmd.io.clk := io.clk
     sdram_cmd.io.addr := Cat(
@@ -237,7 +230,7 @@ class sdramChip(word_ext: UInt) extends RawModule {
       0.U(1.W)
     )
     sdram_cmd.io.en := ((state === s_Read && cnt >= (CL - 1.U) && cnt < (CL - 1.U) + BL)
-      || cmd === WRITE || state === s_Write) && row_open(ba)
+      || cmd === WRITE) && row_open(ba)
     sdram_cmd.io.cmd := Mux(state === s_Idle, cmd, cmd_r)
     sdram_cmd.io.dqm := io.dqm
     sdram_cmd.io.wdata := io.d_i
