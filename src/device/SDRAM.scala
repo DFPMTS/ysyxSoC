@@ -330,7 +330,7 @@ class AXI4SDRAM(address: Seq[AddressSet])(implicit p: Parameters)
     val (in, _) = node.in(0)
     val sdram_bundle = IO(new SDRAMIO)
 
-    val converter = Module(new AXI4DataWidthConverter64to32)
+    val converter = Module(new AXI4DataWidthConverter64to32Chisel)
     converter.io.clock := clock
     converter.io.reset := reset.asBool
     converter.io.in <> in
