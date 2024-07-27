@@ -70,7 +70,7 @@ class ysyxSoCASIC(implicit p: Parameters) extends LazyModule {
     AddressSet.misaligned(0x0f000000, 0x2000).head,
     false,
     true,
-    8,
+    4,
     None,
     Nil,
     false
