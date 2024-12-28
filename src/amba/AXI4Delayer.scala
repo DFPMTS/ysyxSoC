@@ -32,8 +32,7 @@ class AXI4DelayerChisel extends Module {
   val io = IO(new AXI4DelayerIO)
 
   val s = 3
-  // calculation: (Freq / 100MHz - 1) * (2 ^ s)
-  val freq = 901
+  val freq = 733
   val r = ((freq.toDouble / 100) * pow(2, s)).toInt
 
   // read channel

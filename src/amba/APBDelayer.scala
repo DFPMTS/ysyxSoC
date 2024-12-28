@@ -29,7 +29,7 @@ class APBDelayerChisel extends Module {
 
   val s = 3
   // calculation: (Freq / 100MHz - 1) * (2 ^ s)
-  val freq = 901
+  val freq = 733
   val r = ((freq.toDouble / 100 - 1) * pow(2, s)).toInt
 
   val sIdle :: sWaitReady :: sDelay :: Nil = Enum(3)
